@@ -1,6 +1,9 @@
 import requests
 import csv
 import StringIO
+import argparse
+
+from InfusionsoftLibrary import Infusionsoft
 
 try:
     import config
@@ -11,6 +14,9 @@ except ImportError:
 class CallLoop(object):
 
     def __init__(self):
+        self.infusion = Infusionsoft(config.INFUSIONSOFT_APP_NAME,
+                                config.INFUSIONSOFT_API_KEY)
+
         payload = {'redirect_to': '', 
                    'email': config.EMAIL,
                    'password': config.PASSWORD,
@@ -18,7 +24,32 @@ class CallLoop(object):
         self.session = requests.session()
         r = self.session.post("https://members.callloop.com/login", data=payload)
 
-    def get_csv(self):
+    def sync_with_infusionsoft(self, member_list):
+        infusion_list = self.infusion.DataService('query', 'Contact', 10, 0, 
+                                                 {config.FIELD_IMPORTSOURCE: 'CallLoop'},
+                                                 ['Id', 'FirstName', 'LastName', 'Email', config.FIELD_CALLLOOPID])        
+
+        member_add = 0
+        for member in member_list:
+            found = False
+            for infusion_member in infusion_list:
+                if member['Id'] == infusion_member[config.FIELD_CALLLOOPID]:
+                    found = True
+                    break
+            if not found:
+                member_add += 1
+                contact = {'FirstName': member['First'],
+                           'LastName': member['Last'],
+                           'Email': member['Email'],
+                           'Phone1': member['Phone'],
+                           config.FIELD_CALLLOOPID: member['Id'],
+                           config.FIELD_IMPORTSOURCE: 'CallLoop'
+                }
+                contact_id = self.infusion.ContactService('add', contact)
+                print("[%s] - Adding %s %s" % (member['Id'], member['First'], member['Last'],))
+        print("Contacts added - %d" % (member_add,))
+
+    def get_memberlist(self):
         csv_r = self.session.get('https://members.callloop.com/subscribers/search/download_csv',)
 
         reader = csv.DictReader(StringIO.StringIO(csv_r.content))
@@ -46,10 +77,22 @@ class CallLoop(object):
 
 
 def main():
+    parser = argparse.ArgumentParser(prog='callloop-to-infusionsoft')
+
+    parser.add_argument(
+        "--sync",
+        dest="sync",
+        action="store_true",
+        help="Sync with InfusionSoft"
+    )
+
     cl = CallLoop()
 
-    member_dict = cl.get_csv()
-    print member_dict
+    args = parser.parse_args()
+
+    if args.sync:
+        member_list = cl.get_memberlist()
+        cl.sync_with_infusionsoft(member_list)
 
 if __name__ == '__main__':
     main()
